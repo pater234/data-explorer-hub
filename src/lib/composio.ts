@@ -52,6 +52,18 @@ export function clearPendingConnection(): void {
   localStorage.removeItem(PENDING_CONNECTION_KEY);
 }
 
+// Demo mode flag - set to true when backend is unavailable
+const USE_MOCK_DATA = true;
+
+// Mock data for demo mode
+const MOCK_CONNECTED_ACCOUNTS: ConnectedAccount[] = [
+  {
+    provider: 'google-drive',
+    email: 'demo@example.com',
+    connectedAt: new Date().toISOString(),
+  },
+];
+
 // API Functions
 
 /**
@@ -62,6 +74,16 @@ export async function initiateConnection(
   provider: ComposioProvider,
   projectId: string
 ): Promise<ConnectionResponse> {
+  // Demo mode: simulate successful connection
+  if (USE_MOCK_DATA) {
+    console.log('[Demo Mode] Simulating OAuth connection for', provider);
+    // Return a fake connection that will redirect back to our callback
+    return {
+      redirectUrl: `${window.location.origin}/auth/callback?provider=${provider}&status=success`,
+      connectionId: `demo-${Date.now()}`,
+    };
+  }
+
   const endpoint = provider === 'google-drive' 
     ? '/api/composio/connect/google'
     : '/api/composio/connect/onedrive';
@@ -91,6 +113,14 @@ export async function initiateConnection(
 export async function checkConnectionStatus(
   provider: ComposioProvider
 ): Promise<ConnectionStatusResponse> {
+  // Demo mode: always return active
+  if (USE_MOCK_DATA) {
+    return {
+      status: 'ACTIVE',
+      email: 'demo@example.com',
+    };
+  }
+
   const response = await fetch(
     `${API_BASE_URL}/api/composio/status?provider=${provider}`,
     {
@@ -149,6 +179,13 @@ export async function pollConnectionStatus(
  * Get all connected accounts
  */
 export async function getConnectedAccounts(): Promise<ConnectedAccount[]> {
+  // Demo mode: return mock connected account
+  if (USE_MOCK_DATA) {
+    // Simulate network delay
+    await new Promise(resolve => setTimeout(resolve, 300));
+    return MOCK_CONNECTED_ACCOUNTS;
+  }
+
   const response = await fetch(`${API_BASE_URL}/api/composio/connections`, {
     method: 'GET',
     headers: {
