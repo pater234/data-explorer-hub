@@ -1,20 +1,27 @@
 import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { getProject, Project } from '@/lib/api';
+import { getConnectedAccounts, ComposioProvider, ConnectedAccount } from '@/lib/composio';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { CloudConnections } from '@/components/project/CloudConnections';
 import { FileBrowser } from '@/components/project/FileBrowser';
 import { AgentStatusPanel } from '@/components/project/AgentStatusPanel';
 import { ResultsDisplay } from '@/components/project/ResultsDisplay';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, Loader2 } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { ArrowLeft, Loader2, CheckCircle2 } from 'lucide-react';
+import { useToast } from '@/hooks/use-toast';
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { toast } = useToast();
+  
   const [project, setProject] = useState<Project | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [isConnected, setIsConnected] = useState(false);
+  const [connectedAccounts, setConnectedAccounts] = useState<ConnectedAccount[]>([]);
+  const [activeProvider, setActiveProvider] = useState<ComposioProvider | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [analysisStarted, setAnalysisStarted] = useState(false);
   const [analysisComplete, setAnalysisComplete] = useState(false);
@@ -22,8 +29,21 @@ export default function ProjectDetail() {
   useEffect(() => {
     if (id) {
       loadProject(id);
+      checkExistingConnections();
     }
   }, [id]);
+
+  // Handle connection success from OAuth callback
+  useEffect(() => {
+    const connectedProvider = searchParams.get('connected');
+    if (connectedProvider) {
+      setActiveProvider(connectedProvider as ComposioProvider);
+      // Clean up URL
+      setSearchParams({});
+      // Refresh connections
+      checkExistingConnections();
+    }
+  }, [searchParams]);
 
   const loadProject = async (projectId: string) => {
     setIsLoading(true);
@@ -35,8 +55,24 @@ export default function ProjectDetail() {
     }
   };
 
-  const handleConnect = () => {
-    setIsConnected(true);
+  const checkExistingConnections = async () => {
+    try {
+      const accounts = await getConnectedAccounts();
+      setConnectedAccounts(accounts);
+      
+      // If there's an active connection, set it as the active provider
+      if (accounts.length > 0 && !activeProvider) {
+        setActiveProvider(accounts[0].provider);
+      }
+    } catch (error) {
+      // Silently fail - user just needs to connect
+      console.log('No existing connections found');
+    }
+  };
+
+  const handleConnect = (provider: ComposioProvider) => {
+    // This is called when connection is initiated
+    // The actual connection completion is handled via the OAuth callback
   };
 
   const handleFilesSelected = (fileIds: string[]) => {
@@ -78,6 +114,8 @@ export default function ProjectDetail() {
     );
   }
 
+  const isConnected = activeProvider !== null || connectedAccounts.length > 0;
+
   return (
     <AppLayout>
       <div className="space-y-6">
@@ -90,22 +128,46 @@ export default function ProjectDetail() {
           >
             <ArrowLeft className="h-4 w-4" />
           </Button>
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>
+          <div className="flex-1">
+            <div className="flex items-center gap-3">
+              <h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>
+              {isConnected && (
+                <Badge variant="secondary" className="flex items-center gap-1">
+                  <CheckCircle2 className="h-3 w-3" />
+                  Connected
+                </Badge>
+              )}
+            </div>
             {project.description && (
               <p className="text-muted-foreground mt-1">{project.description}</p>
             )}
           </div>
         </div>
 
+        {/* Connected Accounts Summary */}
+        {connectedAccounts.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {connectedAccounts.map((account) => (
+              <Badge key={account.provider} variant="outline" className="py-1.5">
+                {account.provider === 'google-drive' ? '🔵 Google Drive' : '🔷 OneDrive'}
+                {account.email && ` • ${account.email}`}
+              </Badge>
+            ))}
+          </div>
+        )}
+
         {/* Main Content */}
         <div className="grid gap-6 lg:grid-cols-3">
           {/* Left Column - Connections & Files */}
           <div className="lg:col-span-2 space-y-6">
             {!isConnected ? (
-              <CloudConnections onConnect={handleConnect} />
+              <CloudConnections 
+                projectId={id!} 
+                onConnect={handleConnect} 
+              />
             ) : (
               <FileBrowser
+                provider={activeProvider!}
                 selectedFiles={selectedFiles}
                 onFilesSelected={handleFilesSelected}
                 onStartAnalysis={handleStartAnalysis}

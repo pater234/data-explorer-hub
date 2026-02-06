@@ -1,21 +1,57 @@
 import { useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Loader2 } from 'lucide-react';
+import { Loader2, AlertCircle, RefreshCw } from 'lucide-react';
+import { 
+  initiateConnection, 
+  storePendingConnection, 
+  ComposioProvider,
+  getProviderDisplayName 
+} from '@/lib/composio';
+import { useToast } from '@/hooks/use-toast';
 
 interface CloudConnectionsProps {
-  onConnect: () => void;
+  projectId: string;
+  onConnect: (provider: ComposioProvider) => void;
 }
 
-export function CloudConnections({ onConnect }: CloudConnectionsProps) {
-  const [connectingTo, setConnectingTo] = useState<string | null>(null);
+export function CloudConnections({ projectId, onConnect }: CloudConnectionsProps) {
+  const [connectingTo, setConnectingTo] = useState<ComposioProvider | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const { toast } = useToast();
 
-  const handleConnect = async (provider: 'google-drive' | 'onedrive') => {
+  const handleConnect = async (provider: ComposioProvider) => {
     setConnectingTo(provider);
-    // Simulate OAuth flow
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    setConnectingTo(null);
-    onConnect();
+    setError(null);
+
+    try {
+      // Call backend to get OAuth redirect URL
+      const response = await initiateConnection(provider, projectId);
+
+      // Store pending connection in localStorage (survives redirect)
+      storePendingConnection({
+        projectId,
+        provider,
+        connectionId: response.connectionId,
+        initiatedAt: new Date().toISOString(),
+      });
+
+      // Redirect to OAuth provider
+      window.location.href = response.redirectUrl;
+    } catch (err) {
+      setConnectingTo(null);
+      const message = err instanceof Error ? err.message : 'Failed to initiate connection';
+      setError(message);
+      toast({
+        variant: 'destructive',
+        title: 'Connection Failed',
+        description: message,
+      });
+    }
+  };
+
+  const handleRetry = () => {
+    setError(null);
   };
 
   return (
@@ -27,6 +63,19 @@ export function CloudConnections({ onConnect }: CloudConnectionsProps) {
         </CardDescription>
       </CardHeader>
       <CardContent>
+        {error && (
+          <div className="mb-4 p-4 rounded-lg bg-destructive/10 border border-destructive/20 flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-destructive">Connection Error</p>
+              <p className="text-sm text-muted-foreground mt-1">{error}</p>
+            </div>
+            <Button variant="ghost" size="sm" onClick={handleRetry}>
+              <RefreshCw className="h-4 w-4" />
+            </Button>
+          </div>
+        )}
+
         <div className="grid gap-4 sm:grid-cols-2">
           {/* Google Drive */}
           <button
