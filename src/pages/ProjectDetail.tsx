@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { getProject, Project, DataMetrics, SchemaData } from '@/lib/api';
+import { getProject, Project, DataMetrics, SchemaData, MigrateResponse, migrateFiles } from '@/lib/api';
 import { getConnectedAccounts, ComposioProvider, ConnectedAccount } from '@/lib/composio';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { CloudConnections } from '@/components/project/CloudConnections';
 import { FileBrowser } from '@/components/project/FileBrowser';
-import { AgentStatusPanel } from '@/components/project/AgentStatusPanel';
-import { ResultsDisplay } from '@/components/project/ResultsDisplay';
+import { MigrationStatus } from '@/components/project/MigrationStatus';
+import { MigrationResults } from '@/components/project/MigrationResults';
 import { MetricsPanel } from '@/components/project/MetricsPanel';
 import { ChatInterface } from '@/components/project/ChatInterface';
 import { Button } from '@/components/ui/button';
@@ -25,8 +25,10 @@ export default function ProjectDetail() {
   const [connectedAccounts, setConnectedAccounts] = useState<ConnectedAccount[]>([]);
   const [activeProvider, setActiveProvider] = useState<ComposioProvider | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
-  const [analysisStarted, setAnalysisStarted] = useState(false);
-  const [analysisComplete, setAnalysisComplete] = useState(false);
+  const [migrationStarted, setMigrationStarted] = useState(false);
+  const [migrationComplete, setMigrationComplete] = useState(false);
+  const [migrationError, setMigrationError] = useState<string | null>(null);
+  const [migrationResult, setMigrationResult] = useState<MigrateResponse | null>(null);
   const [metrics, setMetrics] = useState<DataMetrics | null>(null);
   const [schema, setSchema] = useState<SchemaData | null>(null);
 
@@ -83,12 +85,39 @@ export default function ProjectDetail() {
     setSelectedFiles(fileIds);
   };
 
-  const handleStartAnalysis = () => {
-    setAnalysisStarted(true);
-  };
+  const handleStartMigration = async () => {
+    setMigrationStarted(true);
+    setMigrationError(null);
 
-  const handleAnalysisComplete = () => {
-    setAnalysisComplete(true);
+    try {
+      const result = await migrateFiles(selectedFiles);
+      setMigrationResult(result);
+      setMigrationComplete(true);
+
+      // Build metrics from migration result
+      const totalRows = Object.values(result.rows_inserted).reduce((a, b) => a + b, 0);
+      setMetrics({
+        totalRecords: totalRows,
+        tableCount: result.tables_created.length,
+        completenessScore: result.success ? 100 : 50,
+        confirmedJoins: 0,
+        suggestedJoins: 0,
+        uniqueEntities: result.tables_created.map(t => ({ name: t, count: result.rows_inserted[t] || 0 })),
+      });
+
+      toast({
+        title: 'Migration Complete',
+        description: `Created ${result.tables_created.length} tables with ${totalRows} total rows`,
+      });
+    } catch (error) {
+      setMigrationError(error instanceof Error ? error.message : 'Migration failed');
+      setMigrationComplete(true);
+      toast({
+        title: 'Migration Failed',
+        description: error instanceof Error ? error.message : 'Unknown error',
+        variant: 'destructive',
+      });
+    }
   };
 
   if (isLoading) {
@@ -165,29 +194,33 @@ export default function ProjectDetail() {
           {/* Left Column - Connections & Files */}
           <div className="lg:col-span-2 space-y-6">
             {!isConnected ? (
-              <CloudConnections 
-                projectId={id!} 
-                onConnect={handleConnect} 
+              <CloudConnections
+                projectId={id!}
+                onConnect={handleConnect}
               />
             ) : (
               <FileBrowser
                 provider={activeProvider!}
                 selectedFiles={selectedFiles}
                 onFilesSelected={handleFilesSelected}
-                onStartAnalysis={handleStartAnalysis}
-                analysisStarted={analysisStarted}
+                onStartAnalysis={handleStartMigration}
+                analysisStarted={migrationStarted}
               />
             )}
 
-            {analysisComplete && (
-              <ResultsDisplay 
-                onMetricsLoaded={setMetrics}
-                onSchemaLoaded={setSchema}
-              />
+            {migrationComplete && migrationResult && (
+              <MigrationResults result={migrationResult} />
             )}
 
-            {/* Chat Interface - appears after analysis */}
-            {analysisComplete && (
+            {migrationComplete && migrationError && (
+              <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg">
+                <p className="text-destructive font-medium">Migration Error</p>
+                <p className="text-sm text-muted-foreground mt-1">{migrationError}</p>
+              </div>
+            )}
+
+            {/* Chat Interface - appears after migration */}
+            {migrationComplete && !migrationError && (
               <ChatInterface
                 schema={schema}
                 metrics={metrics}
@@ -198,13 +231,14 @@ export default function ProjectDetail() {
 
           {/* Right Column - Status & Metrics */}
           <div className="space-y-6">
-            <AgentStatusPanel
-              isActive={analysisStarted}
-              onComplete={handleAnalysisComplete}
+            <MigrationStatus
+              isActive={migrationStarted}
+              isComplete={migrationComplete}
+              error={migrationError}
             />
-            
-            {/* Show metrics panel after analysis is complete */}
-            {analysisComplete && (
+
+            {/* Show metrics panel after migration is complete */}
+            {migrationComplete && !migrationError && (
               <MetricsPanel metrics={metrics} isLoading={!metrics} />
             )}
           </div>

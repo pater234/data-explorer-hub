@@ -3,7 +3,12 @@ from functools import lru_cache
 
 
 class Settings(BaseSettings):
-    gemini_api_key: str
+    gemini_api_key: str = ""
+    # Vertex AI settings (use these instead of gemini_api_key for GCP)
+    gcp_project_id: str = ""
+    gcp_location: str = "us-central1"
+    use_vertex_ai: bool = False
+
     composio_api_key: str = ""
     composio_auth_config_id: str = ""
     composio_auth_config_id_google_drive: str = ""

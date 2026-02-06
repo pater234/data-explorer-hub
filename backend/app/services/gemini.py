@@ -1,9 +1,35 @@
 from google import genai
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class GeminiService:
-    def __init__(self, api_key: str):
-        self.client = genai.Client(api_key=api_key)
+    def __init__(
+        self,
+        api_key: str = "",
+        project_id: str = "",
+        location: str = "us-central1",
+        use_vertex_ai: bool = False
+    ):
+        logger.info(f"Initializing GeminiService (use_vertex_ai={use_vertex_ai}, project_id={project_id})")
+
+        if use_vertex_ai and project_id:
+            # Use Vertex AI (GCP) - uses ADC or service account
+            logger.info(f"Using Vertex AI with project={project_id}, location={location}")
+            self.client = genai.Client(
+                vertexai=True,
+                project=project_id,
+                location=location
+            )
+        elif api_key:
+            # Use Google AI Studio
+            logger.info("Using Google AI Studio with API key")
+            self.client = genai.Client(api_key=api_key)
+        else:
+            raise ValueError("Either api_key or (use_vertex_ai + project_id) must be provided")
+
+        logger.info("GeminiService initialized successfully")
 
     def _build_prompt(self, csv_data: dict[str, str]) -> str:
         """Build the prompt for Gemini with all CSV data."""
@@ -48,11 +74,20 @@ Output ONLY valid PostgreSQL DDL. No explanations, just SQL."""
 
     def infer_schema(self, csv_data: dict[str, str]) -> str:
         """Send CSV data to Gemini and get schema inference."""
+        logger.info(f"Building prompt for {len(csv_data)} CSV files...")
         prompt = self._build_prompt(csv_data)
+        logger.info(f"Prompt length: {len(prompt)} chars")
 
-        response = self.client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
-        )
+        logger.info("Calling Gemini API (model=gemini-2.0-flash)...")
+        try:
+            response = self.client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt
+            )
+            logger.info("Gemini API call successful!")
+            logger.info(f"Response length: {len(response.text)} chars")
+        except Exception as e:
+            logger.error(f"Gemini API call failed: {str(e)}")
+            raise
 
         return self._clean_ddl(response.text)

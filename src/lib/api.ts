@@ -135,42 +135,43 @@ export interface ChatResponse {
   sources?: string[];
 }
 
-// Mock data for development
-const mockProjects: Project[] = [
-  {
-    id: '1',
-    name: 'Q4 Sales Analysis',
-    description: 'Analyzing quarterly sales data across regions',
-    createdAt: '2024-01-15T10:00:00Z',
-    updatedAt: '2024-01-20T15:30:00Z',
-    status: 'active',
-    connectedSources: [],
-  },
-  {
-    id: '2',
-    name: 'Customer Segmentation',
-    description: 'Customer data analysis for marketing',
-    createdAt: '2024-01-10T09:00:00Z',
-    updatedAt: '2024-01-18T12:00:00Z',
-    status: 'active',
-    connectedSources: [],
-  },
-];
+// localStorage key for projects
+const PROJECTS_STORAGE_KEY = 'migration_projects';
+
+// Load projects from localStorage or use defaults
+function loadProjects(): Project[] {
+  try {
+    const stored = localStorage.getItem(PROJECTS_STORAGE_KEY);
+    if (stored) {
+      return JSON.parse(stored);
+    }
+  } catch {
+    // Fall through to defaults
+  }
+  return [];
+}
+
+// Save projects to localStorage
+function saveProjects(projects: Project[]): void {
+  localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projects));
+}
 
 // API Functions
 export async function getProjects(): Promise<Project[]> {
   // Simulate API delay
-  await new Promise(resolve => setTimeout(resolve, 500));
-  return mockProjects;
+  await new Promise(resolve => setTimeout(resolve, 100));
+  return loadProjects();
 }
 
 export async function getProject(id: string): Promise<Project | null> {
-  await new Promise(resolve => setTimeout(resolve, 300));
-  return mockProjects.find(p => p.id === id) || null;
+  await new Promise(resolve => setTimeout(resolve, 100));
+  const projects = loadProjects();
+  return projects.find(p => p.id === id) || null;
 }
 
 export async function createProject(name: string, description?: string): Promise<Project> {
-  await new Promise(resolve => setTimeout(resolve, 400));
+  await new Promise(resolve => setTimeout(resolve, 100));
+  const projects = loadProjects();
   const newProject: Project = {
     id: String(Date.now()),
     name,
@@ -180,7 +181,8 @@ export async function createProject(name: string, description?: string): Promise
     status: 'active',
     connectedSources: [],
   };
-  mockProjects.push(newProject);
+  projects.unshift(newProject);
+  saveProjects(projects);
   return newProject;
 }
 
@@ -366,6 +368,45 @@ export async function getAnalysisResults(jobId: string): Promise<AnalysisResult>
       ],
     },
   };
+}
+
+// Migration types
+export interface MigrateRequest {
+  file_ids: string[];
+  database_name?: string;
+}
+
+export interface MigrateResponse {
+  success: boolean;
+  tables_created: string[];
+  rows_inserted: Record<string, number>;
+  ddl: string;
+  errors: string[];
+  logs: string[];
+}
+
+/**
+ * Migrate selected files to Postgres database
+ * Backend endpoint: POST /api/migrate
+ */
+export async function migrateFiles(fileIds: string[]): Promise<MigrateResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/migrate`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      file_ids: fileIds,
+      database_name: 'migrated_data',
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Migration failed' }));
+    throw new Error(error.detail || 'Migration failed');
+  }
+
+  return response.json();
 }
 
 /**

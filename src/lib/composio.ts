@@ -53,7 +53,7 @@ export function clearPendingConnection(): void {
 }
 
 // Demo mode flag - set to true when backend is unavailable
-const USE_MOCK_DATA = true;
+const USE_MOCK_DATA = false;
 
 // Mock data for demo mode
 const MOCK_CONNECTED_ACCOUNTS: ConnectedAccount[] = [
