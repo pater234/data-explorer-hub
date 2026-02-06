@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { getProject, Project } from '@/lib/api';
+import { getProject, Project, DataMetrics, SchemaData } from '@/lib/api';
 import { getConnectedAccounts, ComposioProvider, ConnectedAccount } from '@/lib/composio';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { CloudConnections } from '@/components/project/CloudConnections';
 import { FileBrowser } from '@/components/project/FileBrowser';
 import { AgentStatusPanel } from '@/components/project/AgentStatusPanel';
 import { ResultsDisplay } from '@/components/project/ResultsDisplay';
+import { MetricsPanel } from '@/components/project/MetricsPanel';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ArrowLeft, Loader2, CheckCircle2 } from 'lucide-react';
@@ -25,6 +26,8 @@ export default function ProjectDetail() {
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [analysisStarted, setAnalysisStarted] = useState(false);
   const [analysisComplete, setAnalysisComplete] = useState(false);
+  const [metrics, setMetrics] = useState<DataMetrics | null>(null);
+  const [schema, setSchema] = useState<SchemaData | null>(null);
 
   useEffect(() => {
     if (id) {
@@ -175,15 +178,25 @@ export default function ProjectDetail() {
               />
             )}
 
-            {analysisComplete && <ResultsDisplay />}
+            {analysisComplete && (
+              <ResultsDisplay 
+                onMetricsLoaded={setMetrics}
+                onSchemaLoaded={setSchema}
+              />
+            )}
           </div>
 
-          {/* Right Column - Status */}
+          {/* Right Column - Status & Metrics */}
           <div className="space-y-6">
             <AgentStatusPanel
               isActive={analysisStarted}
               onComplete={handleAnalysisComplete}
             />
+            
+            {/* Show metrics panel after analysis is complete */}
+            {analysisComplete && (
+              <MetricsPanel metrics={metrics} isLoading={!metrics} />
+            )}
           </div>
         </div>
       </div>

@@ -1,12 +1,19 @@
 import { useState, useEffect } from 'react';
-import { getAnalysisResults, AnalysisResult, TableSchema, JoinProposal } from '@/lib/api';
+import { getAnalysisResults, AnalysisResult, TableSchema, DataMetrics, SchemaData } from '@/lib/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ArrowRight, Database, GitBranch, Lightbulb, Loader2 } from 'lucide-react';
+import { MetricsPanel } from './MetricsPanel';
+import { SchemaVisualization } from './SchemaVisualization';
 
-export function ResultsDisplay() {
+interface ResultsDisplayProps {
+  onMetricsLoaded?: (metrics: DataMetrics) => void;
+  onSchemaLoaded?: (schema: SchemaData) => void;
+}
+
+export function ResultsDisplay({ onMetricsLoaded, onSchemaLoaded }: ResultsDisplayProps) {
   const [results, setResults] = useState<AnalysisResult | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -19,6 +26,14 @@ export function ResultsDisplay() {
     try {
       const data = await getAnalysisResults('mock-job');
       setResults(data);
+      
+      // Notify parent of loaded data for sidebar display
+      if (data.metrics && onMetricsLoaded) {
+        onMetricsLoaded(data.metrics);
+      }
+      if (data.schema && onSchemaLoaded) {
+        onSchemaLoaded(data.schema);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -41,6 +56,11 @@ export function ResultsDisplay() {
   }
 
   if (!results) return null;
+
+  return (
+    <div className="space-y-6">
+      {/* Schema Visualization - Full width */}
+      <SchemaVisualization schema={results.schema} isLoading={isLoading} />
 
   return (
     <Card>
@@ -122,6 +142,7 @@ export function ResultsDisplay() {
         </Tabs>
       </CardContent>
     </Card>
+    </div>
   );
 }
 

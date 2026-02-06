@@ -53,6 +53,47 @@ export interface AnalysisResult {
   tables: TableSchema[];
   joinProposals: JoinProposal[];
   insights: string[];
+  metrics: DataMetrics;
+  schema: SchemaData;
+}
+
+// Gemini-extracted metrics
+export interface DataMetrics {
+  totalRecords: number;
+  tableCount: number;
+  completenessScore: number;
+  confirmedJoins: number;
+  suggestedJoins: number;
+  uniqueEntities: { name: string; count: number }[];
+  dateRange?: { start: string; end: string };
+}
+
+// Schema visualization data
+export interface SchemaData {
+  nodes: SchemaNode[];
+  edges: SchemaEdge[];
+}
+
+export interface SchemaNode {
+  id: string;
+  tableName: string;
+  source: string;
+  columns: SchemaColumn[];
+}
+
+export interface SchemaColumn {
+  name: string;
+  type: string;
+  isPrimaryKey?: boolean;
+  isForeignKey?: boolean;
+}
+
+export interface SchemaEdge {
+  id: string;
+  source: { table: string; column: string };
+  target: { table: string; column: string };
+  confidence: number;
+  joinType: 'inner' | 'left' | 'right' | 'full';
 }
 
 export interface TableSchema {
@@ -253,5 +294,53 @@ export async function getAnalysisResults(jobId: string): Promise<AnalysisResult>
       'High confidence join available between Sales and Customer tables',
       'Customer segmentation data available for all matched records',
     ],
+    metrics: {
+      totalRecords: 2000,
+      tableCount: 2,
+      completenessScore: 94,
+      confirmedJoins: 1,
+      suggestedJoins: 0,
+      uniqueEntities: [
+        { name: 'Customers', count: 420 },
+        { name: 'Orders', count: 1500 },
+        { name: 'Regions', count: 8 },
+      ],
+      dateRange: { start: '2024-10-01', end: '2024-12-31' },
+    },
+    schema: {
+      nodes: [
+        {
+          id: 'sales',
+          tableName: 'Sales_Q4_2024',
+          source: 'Sales_Q4_2024.xlsx',
+          columns: [
+            { name: 'order_id', type: 'string', isPrimaryKey: true },
+            { name: 'customer_id', type: 'string', isForeignKey: true },
+            { name: 'amount', type: 'number' },
+            { name: 'date', type: 'date' },
+          ],
+        },
+        {
+          id: 'customers',
+          tableName: 'Customer_Data',
+          source: 'Customer_Data.xlsx',
+          columns: [
+            { name: 'customer_id', type: 'string', isPrimaryKey: true },
+            { name: 'name', type: 'string' },
+            { name: 'segment', type: 'string' },
+            { name: 'region', type: 'string' },
+          ],
+        },
+      ],
+      edges: [
+        {
+          id: 'sales-customers',
+          source: { table: 'sales', column: 'customer_id' },
+          target: { table: 'customers', column: 'customer_id' },
+          confidence: 0.95,
+          joinType: 'inner',
+        },
+      ],
+    },
   };
 }
