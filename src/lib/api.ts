@@ -370,9 +370,70 @@ export async function getAnalysisResults(jobId: string): Promise<AnalysisResult>
   };
 }
 
+// Preview types (download files without AI)
+export interface PreviewResponse {
+  success: boolean;
+  file_contents: Record<string, string>;
+  file_previews: Record<string, string[]>;
+  logs: string[];
+  error?: string;
+}
+
+// Analysis types
+export interface AnalyzeResponse {
+  success: boolean;
+  proposed_ddl: string;
+  file_previews: Record<string, string[]>;
+  logs: string[];
+  error?: string;
+}
+
+/**
+ * Preview files - download and return contents WITHOUT calling Gemini
+ * Backend endpoint: POST /api/preview
+ */
+export async function previewFiles(fileIds: string[]): Promise<PreviewResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/preview`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ file_ids: fileIds }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Preview failed' }));
+    throw new Error(error.detail || 'Preview failed');
+  }
+
+  return response.json();
+}
+
+/**
+ * Analyze files and get proposed schema (without creating tables)
+ * Backend endpoint: POST /api/analyze
+ */
+export async function analyzeFiles(fileIds: string[]): Promise<AnalyzeResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/analyze`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ file_ids: fileIds }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Analysis failed' }));
+    throw new Error(error.detail || 'Analysis failed');
+  }
+
+  return response.json();
+}
+
 // Migration types
 export interface MigrateRequest {
   file_ids: string[];
+  custom_ddl?: string;
   database_name?: string;
 }
 
@@ -389,7 +450,7 @@ export interface MigrateResponse {
  * Migrate selected files to Postgres database
  * Backend endpoint: POST /api/migrate
  */
-export async function migrateFiles(fileIds: string[]): Promise<MigrateResponse> {
+export async function migrateFiles(fileIds: string[], customDdl?: string): Promise<MigrateResponse> {
   const response = await fetch(`${API_BASE_URL}/api/migrate`, {
     method: 'POST',
     headers: {
@@ -397,6 +458,7 @@ export async function migrateFiles(fileIds: string[]): Promise<MigrateResponse> 
     },
     body: JSON.stringify({
       file_ids: fileIds,
+      custom_ddl: customDdl || '',
       database_name: 'migrated_data',
     }),
   });
@@ -413,6 +475,44 @@ export async function migrateFiles(fileIds: string[]): Promise<MigrateResponse> 
  * Send a chat message to the Gemini-powered assistant
  * Backend endpoint: POST /api/chat
  */
+// Query types
+export interface QueryResponse {
+  success: boolean;
+  columns: string[];
+  rows: any[][];
+  row_count: number;
+  error?: string;
+}
+
+export interface TableInfo {
+  name: string;
+  row_count: number;
+}
+
+/**
+ * Execute a SQL query
+ */
+export async function executeQuery(sql: string): Promise<QueryResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/query`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ sql }),
+  });
+
+  return response.json();
+}
+
+/**
+ * List all tables in the database
+ */
+export async function listTables(): Promise<TableInfo[]> {
+  const response = await fetch(`${API_BASE_URL}/api/tables`);
+  const data = await response.json();
+  return data.tables || [];
+}
+
 export async function sendChatMessage(request: ChatRequest): Promise<ChatResponse> {
   // Try to call real backend first
   try {

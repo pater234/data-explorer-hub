@@ -5,6 +5,9 @@ logger = logging.getLogger(__name__)
 
 
 class ComposioService:
+    # Class-level cache for file lists (simple in-memory cache)
+    _file_cache: dict[str, list[dict]] = {}
+
     def __init__(self, api_key: str, auth_config_id: str, drive_auth_config_id: str = ""):
         self.api_key = api_key
         self.auth_config_id = auth_config_id
@@ -59,63 +62,111 @@ class ComposioService:
         )
         return connection_request.redirectUrl
 
-    def list_spreadsheet_files(self, user_id: str) -> list[dict]:
+    def get_file_info(self, user_id: str, file_id: str) -> dict | None:
+        """Get file info from cache without re-fetching all files."""
+        cache_key = f"{user_id}_files"
+        if cache_key in ComposioService._file_cache:
+            for f in ComposioService._file_cache[cache_key]:
+                if f.get("id") == file_id:
+                    return f
+        return None
+
+    def list_spreadsheet_files(self, user_id: str, use_cache: bool = True) -> list[dict]:
         """List CSV and spreadsheet files from user's Google Drive."""
         if not self.api_key:
             raise ValueError("Composio API key not configured")
 
+        # Check cache first
+        cache_key = f"{user_id}_files"
+        if use_cache and cache_key in ComposioService._file_cache:
+            logger.info(f"Using cached file list ({len(ComposioService._file_cache[cache_key])} files)")
+            return ComposioService._file_cache[cache_key]
+
         toolset = self._get_toolset(user_id)
-        logger.info("Searching for spreadsheet and CSV files...")
-        # Search by mime type OR file extension to catch all spreadsheet/CSV files
-        search_query = (
-            "mimeType='text/csv' or "
-            "mimeType='text/plain' or "
-            "mimeType='application/vnd.google-apps.spreadsheet' or "
-            "mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' or "
-            "mimeType='application/vnd.ms-excel' or "
-            "name contains '.csv' or "
-            "name contains '.xlsx' or "
-            "name contains '.xls'"
-        )
-        logger.info(f"Search query: {search_query}")
-        result = toolset.execute_action(
-            action="GOOGLEDRIVE_FIND_FILE",
-            params={
-                "search_query": search_query,
-                "max_results": 50,
-            },
-        )
+        logger.info("Fetching all files from Google Drive (with pagination)...")
 
-        files = []
-        # Handle different response formats
-        if isinstance(result, dict):
-            logger.info(f"Search result keys: {result.keys()}")
-            if result.get("successful") and result.get("data"):
-                data = result["data"]
-                file_list = data.get("files", data.get("items", []))
-                for f in file_list:
-                    files.append({
-                        "id": f.get("id"),
-                        "name": f.get("name"),
-                        "mimeType": f.get("mimeType"),
-                        "modifiedTime": f.get("modifiedTime"),
-                    })
-            elif result.get("files"):
-                for f in result["files"]:
-                    files.append({
-                        "id": f.get("id"),
-                        "name": f.get("name"),
-                        "mimeType": f.get("mimeType"),
-                        "modifiedTime": f.get("modifiedTime"),
-                    })
+        # Composio's GOOGLEDRIVE_FIND_FILE ignores search_query, so we need to
+        # list ALL files and filter client-side
+        all_files = {}
 
-        logger.info(f"Found {len(files)} files:")
-        for f in files:
-            logger.info(f"  - {f['name']} ({f['mimeType']})")
+        # Allowed mime types for spreadsheets/CSVs
+        allowed_mimes = {
+            'text/csv',
+            'text/plain',
+            'application/vnd.google-apps.spreadsheet',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.ms-excel',
+        }
+        allowed_extensions = {'.csv', '.xlsx', '.xls'}
+
+        page_token = None
+        page_count = 0
+        max_pages = 10  # Safety limit
+
+        try:
+            while page_count < max_pages:
+                page_count += 1
+                logger.info(f"Fetching page {page_count}...")
+
+                params = {"max_results": 100}
+                if page_token:
+                    params["page_token"] = page_token
+
+                result = toolset.execute_action(
+                    action="GOOGLEDRIVE_LIST_FILES",
+                    params=params,
+                )
+
+                if isinstance(result, dict):
+                    data = result.get("data", result)
+                    file_list = data.get("files", data.get("items", []))
+                    logger.info(f"  Got {len(file_list)} files in this page")
+
+                    for f in file_list:
+                        file_id = f.get("id")
+                        name = f.get("name", "")
+                        mime = f.get("mimeType", "")
+
+                        # Skip folders
+                        if mime == "application/vnd.google-apps.folder":
+                            continue
+
+                        # Check if it's a spreadsheet/CSV by mime type or extension
+                        is_allowed = (
+                            mime in allowed_mimes or
+                            any(name.lower().endswith(ext) for ext in allowed_extensions)
+                        )
+
+                        if file_id and is_allowed:
+                            all_files[file_id] = {
+                                "id": file_id,
+                                "name": name,
+                                "mimeType": mime,
+                                "modifiedTime": f.get("modifiedTime"),
+                            }
+                            logger.info(f"  ✅ {name} ({mime})")
+
+                    # Check for more pages
+                    page_token = data.get("nextPageToken")
+                    if not page_token:
+                        logger.info("No more pages")
+                        break
+                else:
+                    logger.warning(f"Unexpected result type: {type(result)}")
+                    break
+
+        except Exception as e:
+            logger.error(f"Failed to list files: {e}")
+
+        files = list(all_files.values())
+        logger.info(f"Total spreadsheet/CSV files found: {len(files)}")
+
+        # Cache the results
+        ComposioService._file_cache[cache_key] = files
 
         return files
 
-    def download_file(self, user_id: str, file_id: str, mime_type: str = "") -> tuple[str, str]:
+    def download_file(self, user_id: str, file_id: str, mime_type: str = "", filename: str = "") -> tuple[str, str]:
         """
         Download a file from Google Drive.
         Returns (filename_without_extension, csv_content).
@@ -125,14 +176,25 @@ class ComposioService:
 
         toolset = self._get_toolset(user_id)
 
-        # Get file info from our cached file list
-        files = self.list_spreadsheet_files(user_id)
-        filename = "unknown"
-        for f in files:
-            if f.get("id") == file_id:
-                filename = f.get("name", "unknown")
-                mime_type = f.get("mimeType", mime_type)
-                break
+        # Try to get file info from cache first
+        if not filename or not mime_type:
+            file_info = self.get_file_info(user_id, file_id)
+            if file_info:
+                filename = file_info.get("name", filename or "unknown")
+                mime_type = file_info.get("mimeType", mime_type)
+            else:
+                # Fallback: get metadata via API
+                try:
+                    result = toolset.execute_action(
+                        action="GOOGLEDRIVE_GET_FILE_METADATA",
+                        params={"file_id": file_id},
+                    )
+                    data = result.get("data", result)
+                    filename = data.get("name", filename or "unknown")
+                    mime_type = data.get("mimeType", mime_type)
+                except Exception as e:
+                    logger.warning(f"Could not get file metadata: {e}")
+                    filename = filename or "unknown"
 
         logger.info(f"Downloading file: {filename} (mime: {mime_type})")
 
@@ -213,11 +275,19 @@ class ComposioService:
         # Check if content is a file path (Composio saves to disk)
         if content and isinstance(content, str) and content.startswith("/"):
             logger.info(f"Content is a file path: {content}")
-            # It's a file path, read the file
+            # It's a file path, read the file with encoding fallback
             try:
-                with open(content, "r") as f:
+                with open(content, "r", encoding="utf-8") as f:
                     content = f.read()
                 logger.info(f"Read {len(content)} bytes from file")
+            except UnicodeDecodeError:
+                # Try latin-1 which can read any byte sequence
+                try:
+                    with open(content, "r", encoding="latin-1") as f:
+                        content = f.read()
+                    logger.info(f"Read {len(content)} bytes from file (latin-1 encoding)")
+                except Exception as e:
+                    logger.error(f"Failed to read file with fallback encoding: {e}")
             except Exception as e:
                 logger.error(f"Failed to read file: {e}")
 

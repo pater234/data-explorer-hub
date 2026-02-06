@@ -7,6 +7,7 @@ import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import Login from "./pages/Login";
 import Projects from "./pages/Projects";
 import ProjectDetail from "./pages/ProjectDetail";
+import QueryPage from "./pages/QueryPage";
 import OAuthCallback from "./pages/OAuthCallback";
 import NotFound from "./pages/NotFound";
 import { ReactNode } from "react";
@@ -67,6 +68,14 @@ const AppRoutes = () => (
       element={
         <ProtectedRoute>
           <OAuthCallback />
+        </ProtectedRoute>
+      }
+    />
+    <Route
+      path="/query"
+      element={
+        <ProtectedRoute>
+          <QueryPage />
         </ProtectedRoute>
       }
     />

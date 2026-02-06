@@ -1,14 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { getProject, Project, DataMetrics, SchemaData, MigrateResponse, migrateFiles } from '@/lib/api';
+import { getProject, Project, DataMetrics, MigrateResponse, PreviewResponse, previewFiles } from '@/lib/api';
 import { getConnectedAccounts, ComposioProvider, ConnectedAccount } from '@/lib/composio';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { CloudConnections } from '@/components/project/CloudConnections';
 import { FileBrowser } from '@/components/project/FileBrowser';
-import { MigrationStatus } from '@/components/project/MigrationStatus';
 import { MigrationResults } from '@/components/project/MigrationResults';
+import { AnalysisWorkspace } from '@/components/project/AnalysisWorkspace';
 import { MetricsPanel } from '@/components/project/MetricsPanel';
-import { ChatInterface } from '@/components/project/ChatInterface';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ArrowLeft, Loader2, CheckCircle2 } from 'lucide-react';
@@ -25,12 +24,13 @@ export default function ProjectDetail() {
   const [connectedAccounts, setConnectedAccounts] = useState<ConnectedAccount[]>([]);
   const [activeProvider, setActiveProvider] = useState<ComposioProvider | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
-  const [migrationStarted, setMigrationStarted] = useState(false);
-  const [migrationComplete, setMigrationComplete] = useState(false);
-  const [migrationError, setMigrationError] = useState<string | null>(null);
+  // Workspace state
+  const [showWorkspace, setShowWorkspace] = useState(false);
+  const [previewResult, setPreviewResult] = useState<PreviewResponse | null>(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  // Migration result
   const [migrationResult, setMigrationResult] = useState<MigrateResponse | null>(null);
   const [metrics, setMetrics] = useState<DataMetrics | null>(null);
-  const [schema, setSchema] = useState<SchemaData | null>(null);
 
   useEffect(() => {
     if (id) {
@@ -85,39 +85,52 @@ export default function ProjectDetail() {
     setSelectedFiles(fileIds);
   };
 
-  const handleStartMigration = async () => {
-    setMigrationStarted(true);
-    setMigrationError(null);
+  // Preview files and show workspace (without calling Gemini yet)
+  const handleStartPreview = async () => {
+    setIsPreviewLoading(true);
 
     try {
-      const result = await migrateFiles(selectedFiles);
-      setMigrationResult(result);
-      setMigrationComplete(true);
-
-      // Build metrics from migration result
-      const totalRows = Object.values(result.rows_inserted).reduce((a, b) => a + b, 0);
-      setMetrics({
-        totalRecords: totalRows,
-        tableCount: result.tables_created.length,
-        completenessScore: result.success ? 100 : 50,
-        confirmedJoins: 0,
-        suggestedJoins: 0,
-        uniqueEntities: result.tables_created.map(t => ({ name: t, count: result.rows_inserted[t] || 0 })),
-      });
-
-      toast({
-        title: 'Migration Complete',
-        description: `Created ${result.tables_created.length} tables with ${totalRows} total rows`,
-      });
+      const result = await previewFiles(selectedFiles);
+      if (result.success) {
+        setPreviewResult(result);
+        setShowWorkspace(true);
+      } else {
+        toast({
+          title: 'Preview Failed',
+          description: result.error || 'Unknown error',
+          variant: 'destructive',
+        });
+      }
     } catch (error) {
-      setMigrationError(error instanceof Error ? error.message : 'Migration failed');
-      setMigrationComplete(true);
       toast({
-        title: 'Migration Failed',
+        title: 'Preview Failed',
         description: error instanceof Error ? error.message : 'Unknown error',
         variant: 'destructive',
       });
+    } finally {
+      setIsPreviewLoading(false);
     }
+  };
+
+  const handleBackToFiles = () => {
+    setShowWorkspace(false);
+    setPreviewResult(null);
+  };
+
+  const handleMigrationComplete = (result: MigrateResponse) => {
+    setMigrationResult(result);
+    setShowWorkspace(false);
+
+    // Build metrics from migration result
+    const totalRows = Object.values(result.rows_inserted).reduce((a, b) => a + b, 0);
+    setMetrics({
+      totalRecords: totalRows,
+      tableCount: result.tables_created.length,
+      completenessScore: result.success ? 100 : 50,
+      confirmedJoins: 0,
+      suggestedJoins: 0,
+      uniqueEntities: result.tables_created.map(t => ({ name: t, count: result.rows_inserted[t] || 0 })),
+    });
   };
 
   if (isLoading) {
@@ -190,59 +203,49 @@ export default function ProjectDetail() {
         )}
 
         {/* Main Content */}
-        <div className="grid gap-6 lg:grid-cols-3">
-          {/* Left Column - Connections & Files */}
-          <div className="lg:col-span-2 space-y-6">
+        {showWorkspace && previewResult ? (
+          // Full-width workspace when previewing data
+          <AnalysisWorkspace
+            preview={previewResult}
+            fileIds={selectedFiles}
+            projectId={id!}
+            onBack={handleBackToFiles}
+            onMigrationComplete={handleMigrationComplete}
+          />
+        ) : migrationResult ? (
+          // Show results after migration
+          <div className="grid gap-6 lg:grid-cols-3">
+            <div className="lg:col-span-2 space-y-6">
+              <MigrationResults result={migrationResult} />
+            </div>
+            <div className="space-y-6">
+              <MetricsPanel metrics={metrics} isLoading={!metrics} />
+            </div>
+          </div>
+        ) : (
+          // File selection view
+          <div className="max-w-2xl">
             {!isConnected ? (
               <CloudConnections
                 projectId={id!}
                 onConnect={handleConnect}
               />
+            ) : isPreviewLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                <span className="ml-3 text-muted-foreground">Loading your data...</span>
+              </div>
             ) : (
               <FileBrowser
                 provider={activeProvider!}
                 selectedFiles={selectedFiles}
                 onFilesSelected={handleFilesSelected}
-                onStartAnalysis={handleStartMigration}
-                analysisStarted={migrationStarted}
-              />
-            )}
-
-            {migrationComplete && migrationResult && (
-              <MigrationResults result={migrationResult} />
-            )}
-
-            {migrationComplete && migrationError && (
-              <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg">
-                <p className="text-destructive font-medium">Migration Error</p>
-                <p className="text-sm text-muted-foreground mt-1">{migrationError}</p>
-              </div>
-            )}
-
-            {/* Chat Interface - appears after migration */}
-            {migrationComplete && !migrationError && (
-              <ChatInterface
-                schema={schema}
-                metrics={metrics}
-                projectId={id!}
+                onStartAnalysis={handleStartPreview}
+                analysisStarted={isPreviewLoading}
               />
             )}
           </div>
-
-          {/* Right Column - Status & Metrics */}
-          <div className="space-y-6">
-            <MigrationStatus
-              isActive={migrationStarted}
-              isComplete={migrationComplete}
-              error={migrationError}
-            />
-
-            {/* Show metrics panel after migration is complete */}
-            {migrationComplete && !migrationError && (
-              <MetricsPanel metrics={metrics} isLoading={!metrics} />
-            )}
-          </div>
-        </div>
+        )}
       </div>
     </AppLayout>
   );

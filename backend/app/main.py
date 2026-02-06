@@ -2,6 +2,10 @@ from fastapi import FastAPI, HTTPException, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
+import logging
+
+# Configure logging to show debug output
+logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(name)s - %(message)s')
 
 from app.config import get_settings
 
@@ -134,12 +138,20 @@ async def get_spreadsheets(
     x_user_id: str = Header(default="default")
 ):
     """List user's spreadsheet files from cloud provider."""
+    print(f"📂 Listing spreadsheets for user: {x_user_id}, provider: {provider}")
     service = get_composio_service()
 
     if not service.is_connected(x_user_id):
+        print(f"❌ User {x_user_id} not connected to cloud provider")
         raise HTTPException(status_code=401, detail="Not connected to cloud provider")
 
+    print(f"✅ User connected, fetching files...")
     files = service.list_spreadsheet_files(x_user_id)
+    print(f"📊 Found {len(files)} files total")
+
+    # Log each file found
+    for f in files:
+        print(f"   - {f['name']} ({f['mimeType']})")
 
     # Transform to match frontend expectations
     return [
@@ -284,8 +296,33 @@ Provide a helpful, concise response about their data. Use markdown formatting fo
 # Migration Endpoint
 # =============================================================================
 
+class PreviewRequest(BaseModel):
+    file_ids: list[str]
+
+
+class PreviewResponse(BaseModel):
+    success: bool
+    file_contents: dict[str, str]  # filename -> full content
+    file_previews: dict[str, list[str]]  # filename -> first few rows
+    logs: list[str]
+    error: str = ""
+
+
+class AnalyzeRequest(BaseModel):
+    file_ids: list[str]
+
+
+class AnalyzeResponse(BaseModel):
+    success: bool
+    proposed_ddl: str
+    file_previews: dict[str, list[str]]  # filename -> first few rows
+    logs: list[str]
+    error: str = ""
+
+
 class MigrateRequest(BaseModel):
     file_ids: list[str]
+    custom_ddl: str = ""  # If provided, use this instead of inferring
     database_name: str = "migrated_data"
 
 
@@ -296,6 +333,147 @@ class MigrateResponse(BaseModel):
     ddl: str
     errors: list[str] = []
     logs: list[str] = []
+
+
+@app.post("/api/preview", response_model=PreviewResponse)
+async def preview_files(request: PreviewRequest, x_user_id: str = Header(default="default")):
+    """
+    Download files and return their contents WITHOUT calling Gemini.
+    Use this to preview data before schema inference.
+    """
+    logs = []
+    def log(msg: str):
+        print(msg)
+        logs.append(msg)
+
+    log("📥 Downloading files for preview...")
+    log(f"📁 Processing {len(request.file_ids)} file(s)")
+
+    composio = get_composio_service()
+
+    if not composio.is_connected(x_user_id):
+        return PreviewResponse(
+            success=False,
+            file_contents={},
+            file_previews={},
+            logs=logs,
+            error="Google Drive not connected"
+        )
+
+    # Download files
+    file_contents = {}
+    file_previews = {}
+    for file_id in request.file_ids:
+        try:
+            name, content = composio.download_file(x_user_id, file_id)
+            log(f"   ✅ Downloaded '{name}' ({len(content):,} bytes)")
+            file_contents[name] = content
+            # Store first 10 rows for preview
+            lines = content.split('\n')[:11]
+            file_previews[name] = lines
+        except Exception as e:
+            log(f"   ❌ Failed to download {file_id}: {str(e)}")
+
+    if not file_contents:
+        return PreviewResponse(
+            success=False,
+            file_contents={},
+            file_previews={},
+            logs=logs,
+            error="No files could be downloaded"
+        )
+
+    log(f"✅ Downloaded {len(file_contents)} file(s)")
+    return PreviewResponse(
+        success=True,
+        file_contents=file_contents,
+        file_previews=file_previews,
+        logs=logs,
+    )
+
+
+@app.post("/api/analyze", response_model=AnalyzeResponse)
+async def analyze_files(request: AnalyzeRequest, x_user_id: str = Header(default="default")):
+    """
+    Download files and propose a schema WITHOUT creating tables.
+    Returns the DDL for user review/editing.
+    """
+    from app.services.gemini import GeminiService
+
+    logs = []
+    def log(msg: str):
+        print(msg)
+        logs.append(msg)
+
+    log("🔍 Analyzing files...")
+    log(f"📁 Processing {len(request.file_ids)} file(s)")
+
+    settings = get_settings()
+
+    # Initialize services
+    composio = get_composio_service()
+    gemini = GeminiService(
+        api_key=settings.gemini_api_key,
+        project_id=settings.gcp_project_id,
+        location=settings.gcp_location,
+        use_vertex_ai=settings.use_vertex_ai
+    )
+
+    if not composio.is_connected(x_user_id):
+        return AnalyzeResponse(
+            success=False,
+            proposed_ddl="",
+            file_previews={},
+            logs=logs,
+            error="Google Drive not connected"
+        )
+
+    # Step 1: Download files
+    log("📥 Downloading files from Google Drive...")
+    csv_data = {}
+    file_previews = {}
+    for file_id in request.file_ids:
+        try:
+            name, content = composio.download_file(x_user_id, file_id)
+            log(f"   ✅ Downloaded '{name}' ({len(content):,} bytes)")
+            csv_data[name] = content
+            # Store first 5 rows for preview
+            lines = content.split('\n')[:6]
+            file_previews[name] = lines
+        except Exception as e:
+            log(f"   ❌ Failed to download {file_id}: {str(e)}")
+
+    if not csv_data:
+        return AnalyzeResponse(
+            success=False,
+            proposed_ddl="",
+            file_previews={},
+            logs=logs,
+            error="No files could be downloaded"
+        )
+
+    # Step 2: Infer schema with Gemini
+    log("🤖 Analyzing data with Gemini AI...")
+    try:
+        ddl = gemini.infer_schema(csv_data)
+        log("✅ Schema inference complete!")
+        log("📋 Review the proposed schema below and edit if needed")
+    except Exception as e:
+        log(f"❌ Schema inference failed: {str(e)}")
+        return AnalyzeResponse(
+            success=False,
+            proposed_ddl="",
+            file_previews=file_previews,
+            logs=logs,
+            error=f"Schema inference failed: {str(e)}"
+        )
+
+    return AnalyzeResponse(
+        success=True,
+        proposed_ddl=ddl,
+        file_previews=file_previews,
+        logs=logs,
+    )
 
 
 @app.post("/api/migrate", response_model=MigrateResponse)
@@ -358,14 +536,19 @@ async def migrate_files(request: MigrateRequest, x_user_id: str = Header(default
 
     log(f"📊 Downloaded {len(csv_data)} file(s): {', '.join(csv_data.keys())}")
 
-    # Step 2: Infer schema with Gemini
-    log("🤖 Step 2: Analyzing data with Gemini AI...")
-    try:
-        ddl = gemini.infer_schema(csv_data)
-        log("✅ Schema inference complete!")
-    except Exception as e:
-        log(f"❌ Schema inference failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Schema inference failed: {str(e)}")
+    # Step 2: Get schema (use custom DDL if provided, otherwise infer)
+    if request.custom_ddl:
+        log("📝 Step 2: Using user-provided schema")
+        ddl = request.custom_ddl
+        log("✅ Custom schema loaded")
+    else:
+        log("🤖 Step 2: Analyzing data with Gemini AI...")
+        try:
+            ddl = gemini.infer_schema(csv_data)
+            log("✅ Schema inference complete!")
+        except Exception as e:
+            log(f"❌ Schema inference failed: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Schema inference failed: {str(e)}")
 
     # Step 3: Create tables in Postgres
     log("🗄️ Step 3: Creating tables in PostgreSQL...")
@@ -402,6 +585,69 @@ async def migrate_files(request: MigrateRequest, x_user_id: str = Header(default
         errors=errors,
         logs=logs,
     )
+
+
+# =============================================================================
+# Query Endpoint - Execute SQL queries
+# =============================================================================
+
+class QueryRequest(BaseModel):
+    sql: str
+
+
+class QueryResponse(BaseModel):
+    success: bool
+    columns: list[str] = []
+    rows: list[list] = []
+    row_count: int = 0
+    error: str = ""
+
+
+@app.post("/api/query", response_model=QueryResponse)
+async def execute_query(request: QueryRequest):
+    """Execute a SQL query against the database."""
+    from app.services.postgres import PostgresService
+
+    settings = get_settings()
+    postgres = PostgresService(db_url=settings.render_db_url)
+
+    sql = request.sql.strip()
+
+    # Basic safety: only allow SELECT queries
+    if not sql.upper().startswith("SELECT"):
+        return QueryResponse(
+            success=False,
+            error="Only SELECT queries are allowed"
+        )
+
+    try:
+        columns, rows = postgres.execute_query(sql)
+        return QueryResponse(
+            success=True,
+            columns=columns,
+            rows=rows,
+            row_count=len(rows),
+        )
+    except Exception as e:
+        return QueryResponse(
+            success=False,
+            error=str(e)
+        )
+
+
+@app.get("/api/tables")
+async def list_tables():
+    """List all tables in the database."""
+    from app.services.postgres import PostgresService
+
+    settings = get_settings()
+    postgres = PostgresService(db_url=settings.render_db_url)
+
+    try:
+        tables = postgres.list_tables()
+        return {"tables": tables}
+    except Exception as e:
+        return {"tables": [], "error": str(e)}
 
 
 # =============================================================================

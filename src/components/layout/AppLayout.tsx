@@ -10,7 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { FileSpreadsheet, FolderKanban, LogOut, User } from 'lucide-react';
+import { FileSpreadsheet, FolderKanban, LogOut, User, Database } from 'lucide-react';
 
 interface AppLayoutProps {
   children: ReactNode;
@@ -28,6 +28,7 @@ export function AppLayout({ children }: AppLayoutProps) {
 
   const navItems = [
     { path: '/projects', label: 'Projects', icon: FolderKanban },
+    { path: '/query', label: 'Query', icon: Database },
   ];
 
   return (

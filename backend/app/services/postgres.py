@@ -103,3 +103,39 @@ class PostgresService:
                 return {"count": count, "sample": sample}
         finally:
             conn.close()
+
+    def execute_query(self, sql: str) -> tuple[list[str], list[list]]:
+        """Execute a SQL query and return columns and rows."""
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                columns = [desc[0] for desc in cur.description] if cur.description else []
+                rows = cur.fetchall()
+                # Convert to list of lists for JSON serialization
+                rows = [list(row) for row in rows]
+                return columns, rows
+        finally:
+            conn.close()
+
+    def list_tables(self) -> list[dict]:
+        """List all tables with row counts."""
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                # Get all tables
+                cur.execute("""
+                    SELECT table_name
+                    FROM information_schema.tables
+                    WHERE table_schema = 'public'
+                    ORDER BY table_name
+                """)
+                tables = []
+                for (table_name,) in cur.fetchall():
+                    # Get row count
+                    cur.execute(f'SELECT COUNT(*) FROM "{table_name}"')
+                    count = cur.fetchone()[0]
+                    tables.append({"name": table_name, "row_count": count})
+                return tables
+        finally:
+            conn.close()

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getProjects, createProject, Project } from '@/lib/api';
+import { getProjects, createProject, Project, listTables, TableInfo } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -16,11 +16,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { Plus, FolderOpen, Calendar, Loader2 } from 'lucide-react';
+import { Plus, FolderOpen, Calendar, Loader2, Database, Table, ArrowRight } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
 export default function Projects() {
   const [projects, setProjects] = useState<Project[]>([]);
+  const [tables, setTables] = useState<TableInfo[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -30,6 +31,7 @@ export default function Projects() {
 
   useEffect(() => {
     loadProjects();
+    loadTables();
   }, []);
 
   const loadProjects = async () => {
@@ -41,6 +43,17 @@ export default function Projects() {
       setIsLoading(false);
     }
   };
+
+  const loadTables = async () => {
+    try {
+      const data = await listTables();
+      setTables(data);
+    } catch (e) {
+      // Silently fail - DB might not be connected
+    }
+  };
+
+  const totalRows = tables.reduce((sum, t) => sum + t.row_count, 0);
 
   const handleCreateProject = async () => {
     if (!newProjectName.trim()) return;
@@ -122,6 +135,48 @@ export default function Projects() {
             </DialogContent>
           </Dialog>
         </div>
+
+        {/* Database Status */}
+        {tables.length > 0 && (
+          <Card className="bg-primary/5 border-primary/20">
+            <CardContent className="py-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                    <Database className="h-5 w-5 text-primary" />
+                  </div>
+                  <div>
+                    <p className="font-medium">Database Connected</p>
+                    <p className="text-sm text-muted-foreground">
+                      {tables.length} table{tables.length !== 1 ? 's' : ''} &middot; {totalRows.toLocaleString()} total rows
+                    </p>
+                  </div>
+                </div>
+                <Button variant="outline" size="sm" onClick={() => navigate('/query')}>
+                  Query Data
+                  <ArrowRight className="ml-2 h-4 w-4" />
+                </Button>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {tables.slice(0, 6).map((table) => (
+                  <div
+                    key={table.name}
+                    className="flex items-center gap-1.5 text-xs bg-background px-2 py-1 rounded-md border"
+                  >
+                    <Table className="h-3 w-3 text-muted-foreground" />
+                    <span>{table.name}</span>
+                    <span className="text-muted-foreground">({table.row_count.toLocaleString()})</span>
+                  </div>
+                ))}
+                {tables.length > 6 && (
+                  <div className="text-xs text-muted-foreground px-2 py-1">
+                    +{tables.length - 6} more
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {isLoading ? (
           <div className="flex items-center justify-center py-12">
