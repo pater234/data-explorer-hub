@@ -1,3 +1,6 @@
+import { API_BASE_URL } from './config';
+import { ComposioProvider } from './composio';
+
 // Placeholder API calls - these will connect to real backend endpoints
 
 export interface Project {
@@ -133,9 +136,19 @@ export async function connectCloudSource(
   };
 }
 
-export async function getSpreadsheets(sourceId: string): Promise<SpreadsheetFile[]> {
+export async function getSpreadsheets(provider: ComposioProvider): Promise<SpreadsheetFile[]> {
+  // In production, this calls the backend which uses Composio to fetch real files
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/spreadsheets?provider=${provider}`);
+    if (response.ok) {
+      return response.json();
+    }
+  } catch {
+    // Fall back to mock data if backend is unavailable
+  }
+  
+  // Mock spreadsheet files for development
   await new Promise(resolve => setTimeout(resolve, 600));
-  // Mock spreadsheet files
   return [
     {
       id: '1',
@@ -143,7 +156,7 @@ export async function getSpreadsheets(sourceId: string): Promise<SpreadsheetFile
       mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       modifiedTime: '2024-01-20T10:00:00Z',
       size: 245000,
-      source: 'google-drive',
+      source: provider,
       path: '/Reports/Sales',
     },
     {
@@ -152,7 +165,7 @@ export async function getSpreadsheets(sourceId: string): Promise<SpreadsheetFile
       mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       modifiedTime: '2024-01-19T14:30:00Z',
       size: 512000,
-      source: 'google-drive',
+      source: provider,
       path: '/Data',
     },
     {
@@ -161,7 +174,7 @@ export async function getSpreadsheets(sourceId: string): Promise<SpreadsheetFile
       mimeType: 'text/csv',
       modifiedTime: '2024-01-18T09:00:00Z',
       size: 89000,
-      source: 'google-drive',
+      source: provider,
       path: '/Inventory',
     },
     {
@@ -170,7 +183,7 @@ export async function getSpreadsheets(sourceId: string): Promise<SpreadsheetFile
       mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       modifiedTime: '2024-01-17T16:45:00Z',
       size: 178000,
-      source: 'google-drive',
+      source: provider,
       path: '/Reports/Regional',
     },
   ];

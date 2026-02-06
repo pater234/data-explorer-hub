@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getSpreadsheets, SpreadsheetFile } from '@/lib/api';
+import { ComposioProvider } from '@/lib/composio';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -8,6 +9,7 @@ import { FileSpreadsheet, Folder, Loader2, Play, RefreshCw } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns';
 
 interface FileBrowserProps {
+  provider: ComposioProvider;
   selectedFiles: string[];
   onFilesSelected: (fileIds: string[]) => void;
   onStartAnalysis: () => void;
@@ -15,6 +17,7 @@ interface FileBrowserProps {
 }
 
 export function FileBrowser({
+  provider,
   selectedFiles,
   onFilesSelected,
   onStartAnalysis,
@@ -30,7 +33,7 @@ export function FileBrowser({
   const loadFiles = async () => {
     setIsLoading(true);
     try {
-      const data = await getSpreadsheets('mock-source');
+      const data = await getSpreadsheets(provider);
       setFiles(data);
     } finally {
       setIsLoading(false);

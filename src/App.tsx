@@ -7,6 +7,7 @@ import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import Login from "./pages/Login";
 import Projects from "./pages/Projects";
 import ProjectDetail from "./pages/ProjectDetail";
+import OAuthCallback from "./pages/OAuthCallback";
 import NotFound from "./pages/NotFound";
 import { ReactNode } from "react";
 
@@ -58,6 +59,14 @@ const AppRoutes = () => (
       element={
         <ProtectedRoute>
           <ProjectDetail />
+        </ProtectedRoute>
+      }
+    />
+    <Route
+      path="/auth/callback"
+      element={
+        <ProtectedRoute>
+          <OAuthCallback />
         </ProtectedRoute>
       }
     />
