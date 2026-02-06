@@ -8,6 +8,7 @@ import { FileBrowser } from '@/components/project/FileBrowser';
 import { AgentStatusPanel } from '@/components/project/AgentStatusPanel';
 import { ResultsDisplay } from '@/components/project/ResultsDisplay';
 import { MetricsPanel } from '@/components/project/MetricsPanel';
+import { ChatInterface } from '@/components/project/ChatInterface';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ArrowLeft, Loader2, CheckCircle2 } from 'lucide-react';
@@ -182,6 +183,15 @@ export default function ProjectDetail() {
               <ResultsDisplay 
                 onMetricsLoaded={setMetrics}
                 onSchemaLoaded={setSchema}
+              />
+            )}
+
+            {/* Chat Interface - appears after analysis */}
+            {analysisComplete && (
+              <ChatInterface
+                schema={schema}
+                metrics={metrics}
+                projectId={id!}
               />
             )}
           </div>

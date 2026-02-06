@@ -112,6 +112,29 @@ export interface ColumnInfo {
   sampleValues: string[];
 }
 
+// Chat types
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+}
+
+export interface ChatRequest {
+  projectId: string;
+  message: string;
+  context: {
+    schema: SchemaData | null;
+    metrics: DataMetrics | null;
+    conversationHistory: ChatMessage[];
+  };
+}
+
+export interface ChatResponse {
+  message: string;
+  sources?: string[];
+}
+
 // Mock data for development
 const mockProjects: Project[] = [
   {
@@ -342,5 +365,66 @@ export async function getAnalysisResults(jobId: string): Promise<AnalysisResult>
         },
       ],
     },
+  };
+}
+
+/**
+ * Send a chat message to the Gemini-powered assistant
+ * Backend endpoint: POST /api/chat
+ */
+export async function sendChatMessage(request: ChatRequest): Promise<ChatResponse> {
+  // Try to call real backend first
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+    });
+    
+    if (response.ok) {
+      return response.json();
+    }
+  } catch {
+    // Fall back to mock response
+  }
+
+  // Mock response for development
+  await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 1000));
+  
+  const { message, context } = request;
+  const lowerMessage = message.toLowerCase();
+  
+  // Generate contextual mock responses
+  if (lowerMessage.includes('table') || lowerMessage.includes('available')) {
+    const tableNames = context.schema?.nodes.map(n => n.tableName).join(', ') || 'Sales_Q4_2024, Customer_Data';
+    return {
+      message: `Based on my analysis, you have ${context.metrics?.tableCount || 2} tables available:\n\n• **${tableNames.split(', ').join('**\n• **')}**\n\nThese tables contain a total of ${context.metrics?.totalRecords?.toLocaleString() || '2,000'} records. Would you like me to explain the structure of any specific table?`,
+    };
+  }
+  
+  if (lowerMessage.includes('relat') || lowerMessage.includes('join') || lowerMessage.includes('connect')) {
+    return {
+      message: `I've identified a relationship between your tables:\n\n**Sales_Q4_2024.customer_id** → **Customer_Data.customer_id**\n\nThis is a high-confidence join (95%) that links each sale to its corresponding customer record. This allows you to analyze sales by customer segment, region, and other customer attributes.`,
+    };
+  }
+  
+  if (lowerMessage.includes('quality') || lowerMessage.includes('complete')) {
+    const score = context.metrics?.completenessScore || 94;
+    return {
+      message: `Your data quality looks good! Here's the summary:\n\n• **Completeness Score**: ${score}%\n• **Missing Values**: Very few null values detected\n• **Unique Entities**: ${context.metrics?.uniqueEntities?.length || 3} distinct entity types identified\n\nThe main areas with some missing data are customer_id fields in the sales table (5 records).`,
+    };
+  }
+  
+  if (lowerMessage.includes('insight') || lowerMessage.includes('summar') || lowerMessage.includes('key')) {
+    return {
+      message: `Here are the key insights from your data:\n\n1. **Volume**: ${context.metrics?.totalRecords?.toLocaleString() || '2,000'} total records across ${context.metrics?.tableCount || 2} tables\n\n2. **Time Range**: Data spans from ${context.metrics?.dateRange?.start || 'Q4 2024'} to ${context.metrics?.dateRange?.end || 'end of 2024'}\n\n3. **Customers**: ${context.metrics?.uniqueEntities?.find(e => e.name === 'Customers')?.count || 420} unique customers identified\n\n4. **Data Integrity**: Strong relationship between sales and customer data with 95% join confidence\n\nWould you like me to dive deeper into any of these areas?`,
+    };
+  }
+  
+  // Default response
+  return {
+    message: `I understand you're asking about "${message}". Based on my analysis of your data structure, I can help you explore:\n\n• Table structures and column types\n• Relationships between tables\n• Data quality metrics\n• Key insights and patterns\n\nCould you be more specific about what you'd like to know?`,
   };
 }
