@@ -18,22 +18,96 @@ class PostgresService:
         matches = re.findall(pattern, ddl, re.IGNORECASE)
         return matches
 
-    def create_tables(self, ddl: str) -> list[str]:
-        """Create tables from DDL, dropping existing tables first."""
+    def create_tables(self, ddl: str) -> tuple[list[str], list[tuple]]:
+        """Create tables from DDL, dropping existing tables first.
+        Returns (table_names, fk_constraints) - FKs should be added after data insertion.
+        """
         tables = self._extract_table_names(ddl)
+
+        # Split DDL into individual statements
+        statements = [s.strip() for s in ddl.split(';') if s.strip()]
+
+        # Separate CREATE TABLE statements and extract FK info
+        create_statements = []
+        fk_alters = []
+
+        for stmt in statements:
+            if not re.match(r'CREATE\s+TABLE', stmt, re.IGNORECASE):
+                continue
+
+            # Extract table name
+            table_match = re.search(r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[""]?(\w+)[""]?', stmt, re.IGNORECASE)
+            if not table_match:
+                continue
+            table_name = table_match.group(1)
+
+            # Find and extract FOREIGN KEY constraints
+            fk_pattern = r'FOREIGN\s+KEY\s*\(([^)]+)\)\s*REFERENCES\s+[""]?(\w+)[""]?\s*\(([^)]+)\)(?:\s+ON\s+(?:DELETE|UPDATE)\s+(?:CASCADE|SET\s+NULL|NO\s+ACTION|RESTRICT))*'
+            fk_matches = re.findall(fk_pattern, stmt, re.IGNORECASE)
+
+            for fk_col, ref_table, ref_col in fk_matches:
+                fk_alters.append((table_name, fk_col.strip().strip('"'), ref_table, ref_col.strip().strip('"')))
+
+            # Remove FK constraints from the CREATE statement line by line
+            lines = stmt.split('\n')
+            clean_lines = []
+            for line in lines:
+                # Skip lines that are FK constraints
+                if re.search(r'^\s*,?\s*FOREIGN\s+KEY', line, re.IGNORECASE):
+                    continue
+                clean_lines.append(line)
+
+            stmt_no_fk = '\n'.join(clean_lines)
+
+            # Clean up trailing commas before )
+            stmt_no_fk = re.sub(r',(\s*)\)', r'\1)', stmt_no_fk)
+
+            # Make sure statement ends with )
+            stmt_no_fk = stmt_no_fk.strip()
+            if not stmt_no_fk.endswith(')'):
+                stmt_no_fk += ')'
+
+            create_statements.append(stmt_no_fk)
 
         conn = self._get_connection()
         try:
             with conn.cursor() as cur:
                 # Drop tables in reverse order (handles FK dependencies)
                 for table in reversed(tables):
-                    cur.execute(f"DROP TABLE IF EXISTS {table} CASCADE;")
+                    cur.execute(f'DROP TABLE IF EXISTS "{table}" CASCADE;')
 
-                # Create tables
-                cur.execute(ddl)
+                # Create tables without FK constraints
+                for stmt in create_statements:
+                    # Clean up the statement - normalize whitespace
+                    stmt = ' '.join(stmt.split())
+                    print(f"DEBUG executing: {stmt}")
+                    try:
+                        cur.execute(stmt + ';')
+                    except Exception as e:
+                        print(f"Error creating table: {e}")
+                        print(f"Statement repr: {repr(stmt)}")
+                        raise
 
             conn.commit()
-            return tables
+            return tables, fk_alters
+        finally:
+            conn.close()
+
+    def add_foreign_keys(self, fk_constraints: list[tuple]) -> list[str]:
+        """Add foreign key constraints after data is inserted."""
+        added = []
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                for table_name, fk_col, ref_table, ref_col in fk_constraints:
+                    try:
+                        alter_sql = f'ALTER TABLE "{table_name}" ADD FOREIGN KEY ("{fk_col}") REFERENCES "{ref_table}" ("{ref_col}");'
+                        cur.execute(alter_sql)
+                        added.append(f"{table_name}.{fk_col} -> {ref_table}.{ref_col}")
+                    except Exception as e:
+                        print(f"Warning: Could not add FK {table_name}.{fk_col} -> {ref_table}.{ref_col}: {e}")
+            conn.commit()
+            return added
         finally:
             conn.close()
 
@@ -47,6 +121,7 @@ class PostgresService:
         conn = self._get_connection()
         try:
             with conn.cursor() as cur:
+
                 # Get actual column names from the table in order
                 cur.execute(f"""
                     SELECT column_name FROM information_schema.columns

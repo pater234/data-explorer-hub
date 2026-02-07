@@ -309,7 +309,8 @@ class PreviewResponse(BaseModel):
 
 
 class AnalyzeRequest(BaseModel):
-    file_ids: list[str]
+    file_ids: list[str] = []
+    file_contents: dict[str, str] = {}  # If provided, use this instead of downloading
 
 
 class AnalyzeResponse(BaseModel):
@@ -321,7 +322,8 @@ class AnalyzeResponse(BaseModel):
 
 
 class MigrateRequest(BaseModel):
-    file_ids: list[str]
+    file_ids: list[str] = []
+    file_contents: dict[str, str] = {}  # If provided, use this instead of downloading
     custom_ddl: str = ""  # If provided, use this instead of inferring
     database_name: str = "migrated_data"
 
@@ -395,8 +397,9 @@ async def preview_files(request: PreviewRequest, x_user_id: str = Header(default
 @app.post("/api/analyze", response_model=AnalyzeResponse)
 async def analyze_files(request: AnalyzeRequest, x_user_id: str = Header(default="default")):
     """
-    Download files and propose a schema WITHOUT creating tables.
-    Returns the DDL for user review/editing.
+    Analyze files and propose a schema WITHOUT creating tables.
+    If file_contents is provided, uses that directly (no download needed).
+    Otherwise downloads from Google Drive.
     """
     from app.services.gemini import GeminiService
 
@@ -406,12 +409,10 @@ async def analyze_files(request: AnalyzeRequest, x_user_id: str = Header(default
         logs.append(msg)
 
     log("🔍 Analyzing files...")
-    log(f"📁 Processing {len(request.file_ids)} file(s)")
 
     settings = get_settings()
 
-    # Initialize services
-    composio = get_composio_service()
+    # Initialize Gemini
     gemini = GeminiService(
         api_key=settings.gemini_api_key,
         project_id=settings.gcp_project_id,
@@ -419,29 +420,41 @@ async def analyze_files(request: AnalyzeRequest, x_user_id: str = Header(default
         use_vertex_ai=settings.use_vertex_ai
     )
 
-    if not composio.is_connected(x_user_id):
-        return AnalyzeResponse(
-            success=False,
-            proposed_ddl="",
-            file_previews={},
-            logs=logs,
-            error="Google Drive not connected"
-        )
-
-    # Step 1: Download files
-    log("📥 Downloading files from Google Drive...")
+    # Use provided file contents if available, otherwise download
     csv_data = {}
     file_previews = {}
-    for file_id in request.file_ids:
-        try:
-            name, content = composio.download_file(x_user_id, file_id)
-            log(f"   ✅ Downloaded '{name}' ({len(content):,} bytes)")
-            csv_data[name] = content
-            # Store first 5 rows for preview
+
+    if request.file_contents:
+        log(f"📁 Using {len(request.file_contents)} pre-loaded file(s)")
+        csv_data = request.file_contents
+        for name, content in csv_data.items():
             lines = content.split('\n')[:6]
             file_previews[name] = lines
-        except Exception as e:
-            log(f"   ❌ Failed to download {file_id}: {str(e)}")
+            log(f"   ✅ {name} ({len(content):,} bytes)")
+    else:
+        log(f"📁 Processing {len(request.file_ids)} file(s)")
+        composio = get_composio_service()
+
+        if not composio.is_connected(x_user_id):
+            return AnalyzeResponse(
+                success=False,
+                proposed_ddl="",
+                file_previews={},
+                logs=logs,
+                error="Google Drive not connected"
+            )
+
+        # Download files
+        log("📥 Downloading files from Google Drive...")
+        for file_id in request.file_ids:
+            try:
+                name, content = composio.download_file(x_user_id, file_id)
+                log(f"   ✅ Downloaded '{name}' ({len(content):,} bytes)")
+                csv_data[name] = content
+                lines = content.split('\n')[:6]
+                file_previews[name] = lines
+            except Exception as e:
+                log(f"   ❌ Failed to download {file_id}: {str(e)}")
 
     if not csv_data:
         return AnalyzeResponse(
@@ -449,7 +462,7 @@ async def analyze_files(request: AnalyzeRequest, x_user_id: str = Header(default
             proposed_ddl="",
             file_previews={},
             logs=logs,
-            error="No files could be downloaded"
+            error="No files to analyze"
         )
 
     # Step 2: Infer schema with Gemini
@@ -479,8 +492,8 @@ async def analyze_files(request: AnalyzeRequest, x_user_id: str = Header(default
 @app.post("/api/migrate", response_model=MigrateResponse)
 async def migrate_files(request: MigrateRequest, x_user_id: str = Header(default="default")):
     """
-    Download selected files from Drive, infer schema with Gemini,
-    create tables in Postgres, and insert data.
+    Create tables in Postgres and insert data.
+    If file_contents is provided, uses that directly (no download needed).
     """
     from app.services.gemini import GeminiService
     from app.services.postgres import PostgresService
@@ -492,19 +505,12 @@ async def migrate_files(request: MigrateRequest, x_user_id: str = Header(default
         logs.append(msg)
 
     log("🚀 Migration started")
-    log(f"📁 Processing {len(request.file_ids)} file(s)")
 
     settings = get_settings()
     errors = []
 
     # Initialize services
     log("⚙️ Initializing services...")
-    if settings.use_vertex_ai:
-        log(f"   Using Vertex AI (project: {settings.gcp_project_id}, location: {settings.gcp_location})")
-    else:
-        log("   Using Google AI Studio")
-
-    composio = get_composio_service()
     gemini = GeminiService(
         api_key=settings.gemini_api_key,
         project_id=settings.gcp_project_id,
@@ -514,27 +520,38 @@ async def migrate_files(request: MigrateRequest, x_user_id: str = Header(default
     postgres = PostgresService(db_url=settings.render_db_url)
     log("✅ Services initialized")
 
-    if not composio.is_connected(x_user_id):
-        log("❌ Google Drive not connected!")
-        raise HTTPException(status_code=401, detail="Google Drive not connected")
-
-    # Step 1: Download files from Drive
-    log("📥 Step 1: Downloading files from Google Drive...")
+    # Use provided file contents if available, otherwise download
     csv_data = {}
-    for file_id in request.file_ids:
-        try:
-            name, content = composio.download_file(x_user_id, file_id)
-            log(f"   ✅ Downloaded '{name}' ({len(content):,} bytes)")
-            csv_data[name] = content
-        except Exception as e:
-            log(f"   ❌ Failed to download {file_id}: {str(e)}")
-            errors.append(f"Failed to download file {file_id}: {str(e)}")
+
+    if request.file_contents:
+        log(f"📁 Using {len(request.file_contents)} pre-loaded file(s)")
+        csv_data = request.file_contents
+        for name, content in csv_data.items():
+            log(f"   ✅ {name} ({len(content):,} bytes)")
+    else:
+        log(f"📁 Processing {len(request.file_ids)} file(s)")
+        composio = get_composio_service()
+
+        if not composio.is_connected(x_user_id):
+            log("❌ Google Drive not connected!")
+            raise HTTPException(status_code=401, detail="Google Drive not connected")
+
+        # Download files from Drive
+        log("📥 Downloading files from Google Drive...")
+        for file_id in request.file_ids:
+            try:
+                name, content = composio.download_file(x_user_id, file_id)
+                log(f"   ✅ Downloaded '{name}' ({len(content):,} bytes)")
+                csv_data[name] = content
+            except Exception as e:
+                log(f"   ❌ Failed to download {file_id}: {str(e)}")
+                errors.append(f"Failed to download file {file_id}: {str(e)}")
 
     if not csv_data:
-        log("❌ No files could be downloaded!")
-        raise HTTPException(status_code=400, detail="No files could be downloaded")
+        log("❌ No files to migrate!")
+        raise HTTPException(status_code=400, detail="No files to migrate")
 
-    log(f"📊 Downloaded {len(csv_data)} file(s): {', '.join(csv_data.keys())}")
+    log(f"📊 Ready to migrate {len(csv_data)} file(s): {', '.join(csv_data.keys())}")
 
     # Step 2: Get schema (use custom DDL if provided, otherwise infer)
     if request.custom_ddl:
@@ -550,11 +567,13 @@ async def migrate_files(request: MigrateRequest, x_user_id: str = Header(default
             log(f"❌ Schema inference failed: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Schema inference failed: {str(e)}")
 
-    # Step 3: Create tables in Postgres
+    # Step 3: Create tables in Postgres (without FK constraints)
     log("🗄️ Step 3: Creating tables in PostgreSQL...")
     try:
-        tables = postgres.create_tables(ddl)
+        tables, fk_constraints = postgres.create_tables(ddl)
         log(f"✅ Created {len(tables)} table(s): {', '.join(tables)}")
+        if fk_constraints:
+            log(f"   📌 Found {len(fk_constraints)} foreign key constraint(s) to add after data insertion")
     except Exception as e:
         log(f"❌ Table creation failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Table creation failed: {str(e)}")
@@ -570,6 +589,17 @@ async def migrate_files(request: MigrateRequest, x_user_id: str = Header(default
         except Exception as e:
             log(f"   ❌ Failed to insert data for {name}: {str(e)}")
             errors.append(f"Failed to insert data for {name}: {str(e)}")
+
+    # Step 5: Add foreign key constraints after all data is inserted
+    if fk_constraints:
+        log("🔗 Step 5: Adding foreign key constraints...")
+        try:
+            added_fks = postgres.add_foreign_keys(fk_constraints)
+            for fk in added_fks:
+                log(f"   ✅ Added FK: {fk}")
+        except Exception as e:
+            log(f"   ⚠️ Some FK constraints failed: {str(e)}")
+            errors.append(f"FK constraint error: {str(e)}")
 
     total_rows = sum(rows_inserted.values())
     if len(errors) == 0:

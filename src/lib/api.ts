@@ -412,14 +412,18 @@ export async function previewFiles(fileIds: string[]): Promise<PreviewResponse> 
 /**
  * Analyze files and get proposed schema (without creating tables)
  * Backend endpoint: POST /api/analyze
+ * If fileContents is provided, uses that directly (no re-download needed)
  */
-export async function analyzeFiles(fileIds: string[]): Promise<AnalyzeResponse> {
+export async function analyzeFiles(fileIds: string[], fileContents?: Record<string, string>): Promise<AnalyzeResponse> {
   const response = await fetch(`${API_BASE_URL}/api/analyze`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ file_ids: fileIds }),
+    body: JSON.stringify({
+      file_ids: fileIds,
+      file_contents: fileContents || {},
+    }),
   });
 
   if (!response.ok) {
@@ -449,8 +453,9 @@ export interface MigrateResponse {
 /**
  * Migrate selected files to Postgres database
  * Backend endpoint: POST /api/migrate
+ * If fileContents is provided, uses that directly (no re-download needed)
  */
-export async function migrateFiles(fileIds: string[], customDdl?: string): Promise<MigrateResponse> {
+export async function migrateFiles(fileIds: string[], customDdl?: string, fileContents?: Record<string, string>): Promise<MigrateResponse> {
   const response = await fetch(`${API_BASE_URL}/api/migrate`, {
     method: 'POST',
     headers: {
@@ -458,6 +463,7 @@ export async function migrateFiles(fileIds: string[], customDdl?: string): Promi
     },
     body: JSON.stringify({
       file_ids: fileIds,
+      file_contents: fileContents || {},
       custom_ddl: customDdl || '',
       database_name: 'migrated_data',
     }),

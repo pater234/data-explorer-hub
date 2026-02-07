@@ -1,12 +1,14 @@
-import { useState, useEffect, useRef } from 'react';
-import { PreviewResponse, sendChatMessage, ChatMessage, migrateFiles, analyzeFiles } from '@/lib/api';
+import { useState, useRef, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
+import { PreviewResponse, analyzeFiles, migrateFiles, sendChatMessage, ChatMessage } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { ArrowLeft, Send, Loader2, Database, Sparkles } from 'lucide-react';
+import { Textarea } from '@/components/ui/textarea';
+import { Input } from '@/components/ui/input';
+import { ArrowLeft, Loader2, Database, Sparkles, Edit3, Eye, Send, MessageSquare } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { SchemaViewer } from './SchemaViewer';
 
 interface AnalysisWorkspaceProps {
   preview: PreviewResponse;
@@ -24,76 +26,63 @@ export function AnalysisWorkspace({
   onMigrationComplete
 }: AnalysisWorkspaceProps) {
   const { toast } = useToast();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [inputValue, setInputValue] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [proposedDdl, setProposedDdl] = useState<string | null>(null);
+  const [editedDdl, setEditedDdl] = useState<string>('');
+  const [isEditing, setIsEditing] = useState(false);
   const [isMigrating, setIsMigrating] = useState(false);
+
+  // Chat state
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [inputValue, setInputValue] = useState('');
+  const [isChatLoading, setIsChatLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Build initial context about the data
+  // Scroll to bottom when messages change
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  // Build context for chat
   const buildDataContext = () => {
     const fileInfo = Object.entries(preview.file_previews).map(([name, rows]) => {
       const headers = rows[0] || '';
-      const sampleRows = rows.slice(1, 4).join('\n');
-      return `**${name}**\nColumns: ${headers}\nSample data:\n${sampleRows}`;
+      const sampleRows = rows.slice(1, 3).join('\n');
+      return `**${name}**\nColumns: ${headers}\nSample: ${sampleRows}`;
     }).join('\n\n');
-
     return fileInfo;
   };
-
-  // Send initial greeting when component mounts
-  useEffect(() => {
-    const dataContext = buildDataContext();
-    const fileCount = Object.keys(preview.file_previews).length;
-    const fileNames = Object.keys(preview.file_previews).join(', ');
-
-    const initialMessage: ChatMessage = {
-      id: '1',
-      role: 'assistant',
-      content: `I've loaded **${fileCount} file(s)**: ${fileNames}
-
-I can see the following data structure:
-
-${dataContext}
-
-Let me help you design a database schema for this data.
-
-**A few questions to get started:**
-1. What is this data used for?
-2. Are there any relationships between these tables (e.g., do they share common IDs)?
-3. Are there any columns that should NOT be imported or that need special handling?
-
-Feel free to ask me anything about your data or tell me how you'd like it structured!`,
-      timestamp: new Date().toISOString(),
-    };
-
-    setMessages([initialMessage]);
-  }, []);
 
   // Call Gemini to analyze and generate schema
   const handleAnalyzeWithAI = async () => {
     setIsAnalyzing(true);
-    const userMessage: ChatMessage = {
-      id: String(Date.now()),
-      role: 'user',
-      content: 'Please analyze my data and generate a database schema.',
-      timestamp: new Date().toISOString(),
-    };
-    setMessages(prev => [...prev, userMessage]);
 
     try {
-      const result = await analyzeFiles(fileIds);
+      const result = await analyzeFiles(fileIds, preview.file_contents);
       if (result.success && result.proposed_ddl) {
         setProposedDdl(result.proposed_ddl);
-        const assistantMessage: ChatMessage = {
-          id: String(Date.now() + 1),
+        setEditedDdl(result.proposed_ddl);
+
+        // Add initial assistant message
+        const initialMessage: ChatMessage = {
+          id: String(Date.now()),
           role: 'assistant',
-          content: `Here's the proposed schema based on your data:\n\n\`\`\`sql\n${result.proposed_ddl}\n\`\`\`\n\nWould you like me to make any changes? Or click **"Migrate Now"** to create these tables and import your data.`,
+          content: `I've analyzed your data and generated a schema with **${result.proposed_ddl.match(/CREATE TABLE/gi)?.length || 0} tables**.
+
+Please review the proposed schema above. If anything doesn't look right or you have questions, let me know! For example:
+- "Why did you choose VARCHAR for the price column?"
+- "Can you change the customer_id to be a foreign key?"
+- "What relationships did you find between the tables?"
+
+When you're happy with the schema, click **"Migrate Now"** to create the tables.`,
           timestamp: new Date().toISOString(),
         };
-        setMessages(prev => [...prev, assistantMessage]);
+        setMessages([initialMessage]);
+
+        toast({
+          title: 'Schema Generated',
+          description: 'Review the proposed schema and migrate when ready.',
+        });
       } else {
         toast({
           title: 'Analysis Failed',
@@ -112,13 +101,9 @@ Feel free to ask me anything about your data or tell me how you'd like it struct
     }
   };
 
-  // Scroll to bottom when messages change
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
+  // Send chat message
   const handleSendMessage = async () => {
-    if (!inputValue.trim() || isLoading) return;
+    if (!inputValue.trim() || isChatLoading) return;
 
     const userMessage: ChatMessage = {
       id: String(Date.now()),
@@ -129,24 +114,19 @@ Feel free to ask me anything about your data or tell me how you'd like it struct
 
     setMessages(prev => [...prev, userMessage]);
     setInputValue('');
-    setIsLoading(true);
+    setIsChatLoading(true);
 
     try {
-      // Build context with data info and proposed DDL if available
       const dataContext = buildDataContext();
-      const ddlContext = proposedDdl
-        ? `\n\nCurrent proposed schema:\n\`\`\`sql\n${proposedDdl}\n\`\`\``
-        : '';
-
-      const systemContext = `You are helping design a database schema. Here's the data:\n\n${dataContext}${ddlContext}`;
+      const schemaContext = editedDdl ? `\n\nCurrent schema:\n\`\`\`sql\n${editedDdl}\n\`\`\`` : '';
 
       const response = await sendChatMessage({
         projectId,
-        message: `${systemContext}\n\nUser question: ${inputValue}`,
+        message: `Context about the data:\n${dataContext}${schemaContext}\n\nUser question: ${inputValue}`,
         context: {
           schema: null,
           metrics: null,
-          conversationHistory: messages.slice(-10),
+          conversationHistory: messages.slice(-5),
         },
       });
 
@@ -165,79 +145,12 @@ Feel free to ask me anything about your data or tell me how you'd like it struct
         variant: 'destructive',
       });
     } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleGenerateSchema = async () => {
-    setIsLoading(true);
-
-    const userMessage: ChatMessage = {
-      id: String(Date.now()),
-      role: 'user',
-      content: 'Please generate the PostgreSQL DDL schema based on our conversation.',
-      timestamp: new Date().toISOString(),
-    };
-    setMessages(prev => [...prev, userMessage]);
-
-    try {
-      const dataContext = buildDataContext();
-      const conversationSummary = messages
-        .map(m => `${m.role}: ${m.content}`)
-        .join('\n\n');
-
-      const response = await sendChatMessage({
-        projectId,
-        message: `Based on our conversation, generate PostgreSQL CREATE TABLE statements.
-
-Data context:
-${dataContext}
-
-Conversation so far:
-${conversationSummary}
-
-Requirements:
-- Use appropriate data types (VARCHAR, TEXT, INTEGER, DECIMAL, DATE, etc.)
-- Add PRIMARY KEY constraints
-- Add FOREIGN KEY constraints if relationships were discussed
-- Wrap column names in double quotes to preserve exact names
-- Output ONLY the SQL DDL, no explanations`,
-        context: {
-          schema: null,
-          metrics: null,
-          conversationHistory: messages.slice(-10),
-        },
-      });
-
-      // Extract DDL from response (look for SQL code block or just use the response)
-      let ddl = response.message;
-      const sqlMatch = ddl.match(/```sql\n?([\s\S]*?)```/);
-      if (sqlMatch) {
-        ddl = sqlMatch[1];
-      }
-      setProposedDdl(ddl);
-
-      const assistantMessage: ChatMessage = {
-        id: String(Date.now() + 1),
-        role: 'assistant',
-        content: `Here's the proposed schema:\n\n\`\`\`sql\n${ddl}\n\`\`\`\n\nWould you like me to make any changes? Or click **"Migrate Now"** to create these tables and import your data.`,
-        timestamp: new Date().toISOString(),
-      };
-
-      setMessages(prev => [...prev, assistantMessage]);
-    } catch (error) {
-      toast({
-        title: 'Error',
-        description: 'Failed to generate schema',
-        variant: 'destructive',
-      });
-    } finally {
-      setIsLoading(false);
+      setIsChatLoading(false);
     }
   };
 
   const handleMigrate = async () => {
-    if (!proposedDdl) {
+    if (!editedDdl) {
       toast({
         title: 'No schema',
         description: 'Please generate a schema first',
@@ -248,7 +161,7 @@ Requirements:
 
     setIsMigrating(true);
     try {
-      const result = await migrateFiles(fileIds, proposedDdl);
+      const result = await migrateFiles(fileIds, editedDdl, preview.file_contents);
       onMigrationComplete(result);
       toast({
         title: 'Migration Complete!',
@@ -277,7 +190,7 @@ Requirements:
           {!proposedDdl && (
             <Button
               onClick={handleAnalyzeWithAI}
-              disabled={isLoading || isMigrating || isAnalyzing}
+              disabled={isAnalyzing}
             >
               {isAnalyzing ? (
                 <>
@@ -292,31 +205,41 @@ Requirements:
               )}
             </Button>
           )}
-          <Button
-            variant="outline"
-            onClick={handleGenerateSchema}
-            disabled={isLoading || isMigrating || isAnalyzing}
-          >
-            <Sparkles className="h-4 w-4 mr-2" />
-            Generate Schema
-          </Button>
           {proposedDdl && (
-            <Button
-              onClick={handleMigrate}
-              disabled={isMigrating}
-            >
-              {isMigrating ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Migrating...
-                </>
-              ) : (
-                <>
-                  <Database className="h-4 w-4 mr-2" />
-                  Migrate Now
-                </>
-              )}
-            </Button>
+            <>
+              <Button
+                variant="outline"
+                onClick={() => setIsEditing(!isEditing)}
+              >
+                {isEditing ? (
+                  <>
+                    <Eye className="h-4 w-4 mr-2" />
+                    View Schema
+                  </>
+                ) : (
+                  <>
+                    <Edit3 className="h-4 w-4 mr-2" />
+                    Edit SQL
+                  </>
+                )}
+              </Button>
+              <Button
+                onClick={handleMigrate}
+                disabled={isMigrating}
+              >
+                {isMigrating ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Migrating...
+                  </>
+                ) : (
+                  <>
+                    <Database className="h-4 w-4 mr-2" />
+                    Migrate Now
+                  </>
+                )}
+              </Button>
+            </>
           )}
         </div>
       </div>
@@ -371,83 +294,110 @@ Requirements:
           </CardContent>
         </Card>
 
-        {/* Right: Chat */}
+        {/* Right: Schema */}
         <Card className="h-[600px] flex flex-col">
           <CardHeader className="pb-2">
             <CardTitle className="text-base flex items-center gap-2">
-              <Sparkles className="h-4 w-4" />
-              Schema Assistant
+              <Database className="h-4 w-4" />
+              {proposedDdl ? 'Proposed Schema' : 'Schema'}
             </CardTitle>
           </CardHeader>
-          <CardContent className="flex-1 flex flex-col overflow-hidden p-0">
-            {/* Messages */}
-            <ScrollArea className="flex-1 px-4">
-              <div className="space-y-4 py-4">
-                {messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                  >
-                    <div
-                      className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
-                        message.role === 'user'
-                          ? 'bg-primary text-primary-foreground'
-                          : 'bg-muted'
-                      }`}
-                    >
-                      <div className="whitespace-pre-wrap prose prose-sm dark:prose-invert max-w-none">
-                        {message.content.split('```').map((part, i) => {
-                          if (i % 2 === 1) {
-                            // Code block
-                            const lines = part.split('\n');
-                            const lang = lines[0];
-                            const code = lines.slice(1).join('\n');
-                            return (
-                              <pre key={i} className="bg-gray-900 text-gray-100 p-2 rounded text-xs overflow-auto">
-                                <code>{code || part}</code>
-                              </pre>
-                            );
-                          }
-                          return <span key={i}>{part}</span>;
-                        })}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                {isLoading && (
-                  <div className="flex justify-start">
-                    <div className="bg-muted rounded-lg px-3 py-2">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    </div>
-                  </div>
-                )}
-                <div ref={messagesEndRef} />
-              </div>
-            </ScrollArea>
-
-            {/* Input */}
-            <div className="p-4 border-t">
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  handleSendMessage();
-                }}
-                className="flex gap-2"
-              >
-                <Input
-                  value={inputValue}
-                  onChange={(e) => setInputValue(e.target.value)}
-                  placeholder="Ask about your data or describe relationships..."
-                  disabled={isLoading || isMigrating}
-                />
-                <Button type="submit" size="icon" disabled={isLoading || isMigrating || !inputValue.trim()}>
-                  <Send className="h-4 w-4" />
+          <CardContent className="flex-1 overflow-auto">
+            {!proposedDdl ? (
+              <div className="flex flex-col items-center justify-center h-full text-center">
+                <Sparkles className="h-12 w-12 text-muted-foreground mb-4" />
+                <h3 className="font-medium mb-2">No schema yet</h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  Click "Analyze with AI" to generate a database schema from your data
+                </p>
+                <Button onClick={handleAnalyzeWithAI} disabled={isAnalyzing}>
+                  {isAnalyzing ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Analyzing...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="h-4 w-4 mr-2" />
+                      Analyze with AI
+                    </>
+                  )}
                 </Button>
-              </form>
-            </div>
+              </div>
+            ) : isEditing ? (
+              <Textarea
+                value={editedDdl}
+                onChange={(e) => setEditedDdl(e.target.value)}
+                className="font-mono text-xs h-full min-h-[500px] resize-none"
+              />
+            ) : (
+              <SchemaViewer ddl={editedDdl} />
+            )}
           </CardContent>
         </Card>
       </div>
+
+      {/* Chat Section */}
+      {proposedDdl && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <MessageSquare className="h-4 w-4" />
+              Schema Assistant
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {/* Messages */}
+            <div className="max-h-[200px] overflow-auto space-y-3">
+              {messages.map((message) => (
+                <div
+                  key={message.id}
+                  className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                >
+                  <div
+                    className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${
+                      message.role === 'user'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-muted'
+                    }`}
+                  >
+                    <div className="prose prose-sm dark:prose-invert max-w-none [&>p]:my-1 [&>ul]:my-1 [&>ol]:my-1">
+                      <ReactMarkdown>{message.content}</ReactMarkdown>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {isChatLoading && (
+                <div className="flex justify-start">
+                  <div className="bg-muted rounded-lg px-3 py-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  </div>
+                </div>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+
+            {/* Input */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSendMessage();
+              }}
+              className="flex gap-2"
+            >
+              <Input
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
+                placeholder="Ask about the schema or request changes..."
+                disabled={isChatLoading}
+              />
+              <Button type="submit" size="icon" disabled={isChatLoading || !inputValue.trim()}>
+                <Send className="h-4 w-4" />
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
